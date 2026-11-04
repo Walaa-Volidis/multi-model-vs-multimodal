@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useReducer, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Monitor } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { runRace } from "@/engine/race";
+import { clearKey, getKey, keyStatus as readKeyStatus, type KeyStatus } from "@/lib/keys";
 import { emptyRace, lanesFor, raceReducer, type RaceFile, type RaceMode } from "@/lib/race";
 import { cn } from "@/lib/utils";
 import { rise } from "../motion";
@@ -9,48 +10,58 @@ import { Composer } from "./Composer";
 import { KeySetup } from "./KeySetup";
 import { LaneView } from "./LaneView";
 
-type KeyStatus = Awaited<ReturnType<NonNullable<Window["desktop"]>["ai"]["keyStatus"]>>;
+const KEY_NOTE: Record<NonNullable<KeyStatus["source"]>, string> = {
+  desktop: "OpenRouter key saved on this computer",
+  env: "Using OPENROUTER_API_KEY from the environment",
+  browser: "OpenRouter key remembered in this browser",
+  session: "OpenRouter key kept until you close this tab",
+};
 
 /**
- * "Try it live": the same files and question run through a multi-model
- * pipeline and a single multimodal model side by side, with real model calls through OpenRouter.
+ * "Try it live": the visitor's files and question run through a multi-model
+ * pipeline, one multimodal model, or both, with real model calls to OpenRouter
+ * made straight from this page using the visitor's own key.
  */
 export function TryIt() {
-  const ai = window.desktop?.ai;
   const [keyStatus, setKeyStatus] = useState<KeyStatus | null>(null);
   const [race, dispatch] = useReducer(raceReducer, emptyRace);
   const [startError, setStartError] = useState<string | null>(null);
   const [mode, setMode] = useState<RaceMode>("both");
+  const controller = useRef<AbortController | null>(null);
 
   const refreshKey = useCallback(() => {
-    ai?.keyStatus().then(setKeyStatus);
-  }, [ai]);
+    readKeyStatus().then(setKeyStatus);
+  }, []);
 
   useEffect(() => {
-    if (!ai) return;
     refreshKey();
-    return ai.onRaceEvent((event) => dispatch({ type: "event", event }));
-  }, [ai, refreshKey]);
+    return () => controller.current?.abort();
+  }, [refreshKey]);
 
   async function run(question: string, files: RaceFile[]) {
-    if (!ai) return;
     setStartError(null);
-    const runId = crypto.randomUUID();
-    dispatch({ type: "start", runId, mode }); // before invoking, so no early event is dropped
-    const result = await ai.startRace({ runId, mode, question, files });
-    if (!result.ok) {
-      dispatch({ type: "reset" });
-      setStartError(result.error ?? "Couldn't start the race.");
+    const apiKey = await getKey();
+    if (!apiKey) {
+      setStartError("Add your OpenRouter API key first.");
+      refreshKey();
+      return;
     }
+    controller.current?.abort(); // one run at a time
+    const ac = new AbortController();
+    controller.current = ac;
+    const runId = crypto.randomUUID();
+    dispatch({ type: "start", runId, mode });
+    runRace(apiKey, { runId, mode, question, files }, (event) => dispatch({ type: "event", event }), ac.signal);
   }
 
   function stop() {
-    if (race.runId) ai?.cancelRace(race.runId);
+    controller.current?.abort();
     dispatch({ type: "stop" });
   }
 
   async function removeKey() {
-    await ai?.clearKey();
+    stop();
+    await clearKey();
     refreshKey();
   }
 
@@ -74,30 +85,17 @@ export function TryIt() {
       </p>
 
       <div className="mt-8">
-        {!ai ? (
-          <div className="flex items-start gap-4 rounded-2xl border border-white/[0.08] bg-surface-1 p-6">
-            <Monitor className="mt-0.5 size-5 shrink-0 text-muted-foreground" aria-hidden />
-            <p className="text-sm leading-relaxed text-muted-foreground">
-              <span className="text-foreground">Live runs work in the desktop app.</span> Start it with{" "}
-              <code className="rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-xs">npm run electron:dev</code> so your API
-              key stays on your computer and never touches a web page.
-            </p>
-          </div>
-        ) : keyStatus === null ? null : !keyStatus.hasKey ? (
+        {keyStatus === null ? null : !keyStatus.hasKey ? (
           <KeySetup onSaved={refreshKey} />
         ) : (
           <>
             <Composer mode={mode} onModeChange={setMode} running={race.running} onRun={run} onStop={stop} />
             <div className="mt-2 flex justify-end gap-3 font-mono text-[11px] text-muted-foreground">
-              {keyStatus.source === "saved" ? (
-                <>
-                  <span>API key saved on this computer</span>
-                  <button type="button" onClick={removeKey} className="underline underline-offset-4 hover:text-foreground">
-                    Remove
-                  </button>
-                </>
-              ) : (
-                <span>Using OPENROUTER_API_KEY from the environment</span>
+              <span>{keyStatus.source ? KEY_NOTE[keyStatus.source] : null}</span>
+              {keyStatus.source !== "env" && (
+                <button type="button" onClick={removeKey} className="underline underline-offset-4 hover:text-foreground">
+                  Remove key
+                </button>
               )}
             </div>
             {startError && (

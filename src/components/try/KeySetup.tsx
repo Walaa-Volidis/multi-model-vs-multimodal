@@ -1,10 +1,13 @@
 import { useState } from "react";
 import { KeyRound, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { isDesktop, saveKey } from "@/lib/keys";
 
-/** First-run panel: paste an OpenRouter API key, which is checked and then stored encrypted. */
+/** First-run panel: paste an OpenRouter API key, which is checked with OpenRouter and then stored. */
 export function KeySetup({ onSaved }: { onSaved: () => void }) {
+  const desktop = isDesktop();
   const [key, setKey] = useState("");
+  const [remember, setRemember] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -12,7 +15,7 @@ export function KeySetup({ onSaved }: { onSaved: () => void }) {
     e.preventDefault();
     setSaving(true);
     setError(null);
-    const result = await window.desktop!.ai.saveKey(key);
+    const result = await saveKey(key, remember);
     setSaving(false);
     if (result.ok) onSaved();
     else setError(result.error ?? "Couldn't save the key.");
@@ -27,8 +30,11 @@ export function KeySetup({ onSaved }: { onSaved: () => void }) {
         <h3 className="font-display text-3xl">Connect to real models</h3>
       </div>
       <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
-        One OpenRouter key reaches real models from Meta, Google, Mistral, Cohere, Qwen, OpenAI, and Anthropic. Your key is
-        checked once, then stored encrypted by your operating system on this computer only. A typical run costs a few cents.
+        One OpenRouter key reaches real models from Meta, Google, Mistral, Cohere, Qwen, OpenAI, and Anthropic. Runs are
+        billed to your OpenRouter account, usually a few cents each.{" "}
+        {desktop
+          ? "Your key is checked once, then stored encrypted by your operating system on this computer only."
+          : "Your key stays in this browser and is sent only to OpenRouter, never to this site's server."}
       </p>
       <label htmlFor="api-key" className="mt-6 block font-mono text-[11px] tracking-[0.1em] text-muted-foreground uppercase">
         OpenRouter API key
@@ -49,6 +55,17 @@ export function KeySetup({ onSaved }: { onSaved: () => void }) {
         <p id="api-key-error" role="alert" className="mt-2 text-sm text-destructive">
           {error}
         </p>
+      )}
+      {!desktop && (
+        <label className="mt-4 flex cursor-pointer items-center gap-2.5 text-sm text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={remember}
+            onChange={(e) => setRemember(e.target.checked)}
+            className="size-4 accent-[var(--modal)]"
+          />
+          Remember on this device (otherwise it's forgotten when you close the tab)
+        </label>
       )}
       <div className="mt-6 flex items-center justify-between gap-4">
         <a

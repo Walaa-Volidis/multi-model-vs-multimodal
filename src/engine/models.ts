@@ -3,11 +3,32 @@
 // To swap a model, change its id here; labels and prices come from the live
 // catalog at run time.
 
-const ROSTER = {
+export type FileKind = "image" | "audio" | "pdf" | "text";
+export type SpecialistKey = "vision" | "audio" | "document" | "language";
+
+export interface ModelEntry {
+  id: string;
+  vendor: string;
+}
+
+export interface Specialist extends ModelEntry {
+  reads: FileKind[];
+  job: string;
+}
+
+export const ROSTER = {
   // Reads the upload and decides which specialists to call (multi-model lane).
   planner: { id: "openai/gpt-6-luna", vendor: "OpenAI" },
 
-  // Specialists the planner can choose from. `reads` = file kinds it can open.
+  // Writes the final answer in the multi-model lane, from the specialists' notes.
+  final: { id: "anthropic/claude-sonnet-5.5", vendor: "Anthropic" },
+
+  // The single model in the multimodal lane: text, images, audio, and PDFs in one request.
+  multimodal: { id: "google/gemini-3.8-flash", vendor: "Google" },
+} satisfies Record<string, ModelEntry>;
+
+// Specialists the planner can choose from. `reads` = file kinds it can open.
+export const SPECIALISTS: Record<SpecialistKey, Specialist> = {
   vision: {
     id: "meta-llama/llama-4-maverick",
     vendor: "Meta",
@@ -32,14 +53,6 @@ const ROSTER = {
     reads: [],
     job: "Works on text only: translates, rewrites, summarizes, or extracts from other specialists' output.",
   },
-
-  // Writes the final answer in the multi-model lane, from the specialists' notes.
-  final: { id: "anthropic/claude-sonnet-5.5", vendor: "Anthropic" },
-
-  // The single model in the multimodal lane: text, images, audio, and PDFs in one request.
-  multimodal: { id: "google/gemini-3.8-flash", vendor: "Google" },
 };
 
-const SPECIALISTS = ["vision", "audio", "document", "language"];
-
-module.exports = { ROSTER, SPECIALISTS };
+export const SPECIALIST_KEYS = Object.keys(SPECIALISTS) as SpecialistKey[];

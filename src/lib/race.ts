@@ -1,4 +1,4 @@
-// Types shared with electron/race.cjs (which emits these events) and a reducer
+// Types shared with src/engine/race.ts (which emits these events) and a reducer
 // that turns the event stream into what the two lanes render.
 
 export type Lane = "multi" | "single";
@@ -40,18 +40,12 @@ export type RaceEvent = { runId: string } & (
   | { type: "run-done" }
 );
 
+/** The desktop app's encrypted key store (electron/preload.cjs). */
 export interface DesktopAI {
-  keyStatus(): Promise<{ hasKey: boolean; source: "saved" | "env" | null; canEncrypt: boolean }>;
+  keyStatus(): Promise<{ hasKey: boolean; source: "saved" | "env" | null }>;
+  getKey(): Promise<string | null>;
   saveKey(key: string): Promise<{ ok: boolean; error?: string }>;
   clearKey(): Promise<{ ok: boolean }>;
-  startRace(request: {
-    runId: string;
-    mode: RaceMode;
-    question: string;
-    files: RaceFile[];
-  }): Promise<{ ok: boolean; runId?: string; error?: string }>;
-  cancelRace(runId: string): Promise<void>;
-  onRaceEvent(callback: (event: RaceEvent) => void): () => void;
 }
 
 // ── Reducer ───────────────────────────────────────────────────────────────

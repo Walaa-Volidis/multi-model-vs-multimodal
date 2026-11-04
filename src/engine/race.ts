@@ -14,6 +14,10 @@ import { catalog, chat, streamChat, type ChatMessage, type ContentPart, type Usa
 const ANSWER_STYLE =
   "Answer in plain language for a curious non-expert, in under 150 words. Lead with the direct answer.";
 const MAX_STEPS = 6;
+// Answers are under 150 words (~200 tokens); specialists' notes run longer.
+const ANSWER_TOKENS = 700;
+const SPECIALIST_TOKENS = 1200;
+const PLANNER_TOKENS = 800;
 
 type Emit = (event: RaceEvent) => void;
 type LaneEvent = Extract<RaceEvent, { lane: Lane }>;
@@ -149,7 +153,9 @@ class LaneRun {
     try {
       const { text, usage, model } = await streamChat(
         this.apiKey,
-        { model: entry.id, messages, max_tokens: 4000 },
+        // Keep caps close to real need: OpenRouter checks the account can cover
+        // max_tokens up front, so oversized caps fail on low-credit keys (402).
+        { model: entry.id, messages, max_tokens: step.role === "final" ? ANSWER_TOKENS : SPECIALIST_TOKENS },
         { signal: this.signal, onText: (chunk) => this.emit({ type: "delta", stepId: step.id, text: chunk }) },
       );
       await record(this.totals, model ?? entry.id, usage);
@@ -269,7 +275,7 @@ async function runMultiModel(run: LaneRun, question: string, files: RaceFile[]) 
           model: ROSTER.planner.id,
           messages: [{ role: "user", content: plannerPrompt(question, files) }],
           response_format: { type: "json_object" },
-          max_tokens: 1500,
+          max_tokens: PLANNER_TOKENS,
         },
         { signal: run.signal },
       );

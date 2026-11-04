@@ -1,18 +1,51 @@
 // Minimal OpenRouter client: chat completions (streamed or not), the model
-// catalog, and a key check. OpenRouter's API is OpenAI-compatible.
+// catalog, and a key check. OpenRouter's API is OpenAI-compatible and allows
+// browser calls (CORS), so this runs in the page on both the web and desktop.
 
 const BASE = "https://openrouter.ai/api/v1";
 const APP_HEADERS = { "X-OpenRouter-Title": "Multimodel vs Multimodal" };
 
-class OpenRouterError extends Error {
-  constructor(message, status) {
+export interface Usage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  cost?: number;
+}
+
+export interface CatalogModel {
+  id: string;
+  name?: string;
+  pricing?: { prompt?: string; completion?: string };
+}
+
+export type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } }
+  | { type: "input_audio"; input_audio: { data: string; format: string } }
+  | { type: "file"; file: { filename: string; file_data: string } };
+
+export interface ChatMessage {
+  role: "system" | "user" | "assistant";
+  content: string | ContentPart[];
+}
+
+export interface ChatRequest {
+  model: string;
+  messages: ChatMessage[];
+  max_tokens?: number;
+  response_format?: { type: "json_object" };
+}
+
+export class OpenRouterError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number,
+  ) {
     super(message);
-    this.status = status;
   }
 }
 
 /** Turns an HTTP status into a message a non-developer can act on. */
-function explain(status, message) {
+function explain(status: number | undefined, message: string): string {
   switch (status) {
     case 401:
       return "Your OpenRouter key was rejected. Remove it below and add a valid one.";
@@ -32,7 +65,7 @@ function explain(status, message) {
   }
 }
 
-async function failure(res) {
+async function failure(res: Response): Promise<OpenRouterError> {
   let message = res.statusText;
   try {
     const body = await res.json();
@@ -43,28 +76,31 @@ async function failure(res) {
   return new OpenRouterError(explain(res.status, message), res.status);
 }
 
-function headers(apiKey) {
-  return { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", ...APP_HEADERS };
-}
+const headers = (apiKey: string) => ({
+  Authorization: `Bearer ${apiKey}`,
+  "Content-Type": "application/json",
+  ...APP_HEADERS,
+});
 
-/**
- * Streams a chat completion. Calls onText for each text chunk and resolves
- * with { text, usage, model } once the stream ends.
- */
-async function streamChat(apiKey, body, { signal, onText }) {
+/** Streams a chat completion, calling onText per chunk. */
+export async function streamChat(
+  apiKey: string,
+  body: ChatRequest,
+  { signal, onText }: { signal: AbortSignal; onText: (text: string) => void },
+): Promise<{ text: string; usage: Usage | null; model: string }> {
   const res = await fetch(`${BASE}/chat/completions`, {
     method: "POST",
     headers: headers(apiKey),
     body: JSON.stringify({ ...body, stream: true }),
     signal,
   });
-  if (!res.ok) throw await failure(res);
+  if (!res.ok || !res.body) throw await failure(res);
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let text = "";
-  let usage = null;
+  let usage: Usage | null = null;
   let model = body.model;
 
   for (;;) {
@@ -73,7 +109,7 @@ async function streamChat(apiKey, body, { signal, onText }) {
     buffer += decoder.decode(value, { stream: true });
 
     // Server-sent events: one "data: {...}" per line; ":" lines are keep-alive comments.
-    let newline;
+    let newline: number;
     while ((newline = buffer.indexOf("\n")) >= 0) {
       const line = buffer.slice(0, newline).trim();
       buffer = buffer.slice(newline + 1);
@@ -90,7 +126,7 @@ async function streamChat(apiKey, body, { signal, onText }) {
       if (chunk.error) throw new OpenRouterError(explain(chunk.error.code, chunk.error.message), chunk.error.code);
       if (chunk.model) model = chunk.model;
       if (chunk.usage) usage = chunk.usage;
-      const piece = chunk.choices?.[0]?.delta?.content;
+      const piece: string | undefined = chunk.choices?.[0]?.delta?.content;
       if (piece) {
         text += piece;
         onText(piece);
@@ -101,7 +137,11 @@ async function streamChat(apiKey, body, { signal, onText }) {
 }
 
 /** A non-streamed chat completion, used for the planner's JSON reply. */
-async function chat(apiKey, body, { signal }) {
+export async function chat(
+  apiKey: string,
+  body: ChatRequest,
+  { signal }: { signal: AbortSignal },
+): Promise<{ text: string; usage: Usage | null; model: string }> {
   const res = await fetch(`${BASE}/chat/completions`, {
     method: "POST",
     headers: headers(apiKey),
@@ -115,19 +155,20 @@ async function chat(apiKey, body, { signal }) {
 }
 
 // The public catalog gives each model's display name and per-token price.
-let catalogPromise = null;
-function catalog() {
+let catalogPromise: Promise<Map<string, CatalogModel>> | null = null;
+export function catalog(): Promise<Map<string, CatalogModel>> {
   catalogPromise ??= fetch(`${BASE}/models`)
     .then((r) => (r.ok ? r.json() : { data: [] }))
-    .then((j) => new Map((j.data ?? []).map((m) => [m.id, m])))
+    .then((j: { data?: CatalogModel[] }) => new Map((j.data ?? []).map((m) => [m.id, m])))
     .catch(() => {
       catalogPromise = null; // retry next time
-      return new Map();
+      return new Map<string, CatalogModel>();
     });
   return catalogPromise;
 }
 
-async function checkKey(apiKey) {
+/** Confirms a key works with one authenticated request that costs nothing. */
+export async function checkKey(apiKey: string): Promise<{ ok: boolean; error?: string }> {
   try {
     const res = await fetch(`${BASE}/key`, { headers: headers(apiKey) });
     if (res.ok) return { ok: true };
@@ -136,5 +177,3 @@ async function checkKey(apiKey) {
     return { ok: false, error: "Couldn't reach OpenRouter. Check your internet connection." };
   }
 }
-
-module.exports = { streamChat, chat, catalog, checkKey, OpenRouterError };

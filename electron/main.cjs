@@ -1,11 +1,9 @@
-// Electron main process: one frameless-style window with a custom title bar,
-// plus the live "race" against real models on OpenRouter. The API key lives only here
-// (encrypted with the OS keychain via safeStorage); the UI never sees it.
+// Electron main process: one window with a custom title bar, plus encrypted
+// storage for the OpenRouter key (OS keychain via safeStorage). The page itself
+// runs the models (src/engine), exactly as it does on the website.
 const { app, BrowserWindow, shell, ipcMain, safeStorage } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
-const crypto = require("node:crypto");
-const { runRace, checkKey } = require("./race.cjs");
 
 // ── API key storage ───────────────────────────────────────────────────────
 const keyFile = () => path.join(app.getPath("userData"), "openrouter-key.bin");
@@ -25,15 +23,15 @@ const activeKey = () => savedKey() ?? process.env.OPENROUTER_API_KEY ?? null;
 ipcMain.handle("key:status", () => ({
   hasKey: Boolean(activeKey()),
   source: savedKey() ? "saved" : process.env.OPENROUTER_API_KEY ? "env" : null,
-  canEncrypt: safeStorage.isEncryptionAvailable(),
 }));
 
-ipcMain.handle("key:save", async (_e, key) => {
+ipcMain.handle("key:get", () => activeKey());
+
+// The page has already checked the key with OpenRouter before saving it.
+ipcMain.handle("key:save", (_e, key) => {
   const trimmed = String(key ?? "").trim();
   if (!trimmed) return { ok: false, error: "Paste an API key first." };
   if (!safeStorage.isEncryptionAvailable()) return { ok: false, error: "This system can't store the key securely." };
-  const check = await checkKey(trimmed);
-  if (!check.ok) return check;
   fs.writeFileSync(keyFile(), safeStorage.encryptString(trimmed));
   return { ok: true };
 });
@@ -41,38 +39,6 @@ ipcMain.handle("key:save", async (_e, key) => {
 ipcMain.handle("key:clear", () => {
   fs.rmSync(keyFile(), { force: true });
   return { ok: true };
-});
-
-// ── The race ──────────────────────────────────────────────────────────────
-const runs = new Map(); // runId → AbortController
-
-ipcMain.handle("race:start", (event, request) => {
-  const apiKey = activeKey();
-  if (!apiKey) return { ok: false, error: "Add your OpenRouter API key first." };
-
-  // Only one race at a time per window.
-  for (const controller of runs.values()) controller.abort();
-  runs.clear();
-
-  // The renderer picks the id so it can listen before the first event arrives.
-  const runId = typeof request?.runId === "string" ? request.runId : crypto.randomUUID();
-  const controller = new AbortController();
-  runs.set(runId, controller);
-  const sender = event.sender;
-  const emit = (payload) => {
-    if (!sender.isDestroyed()) sender.send("race:event", { runId, ...payload });
-  };
-
-  runRace(apiKey, request, emit, controller.signal).finally(() => {
-    runs.delete(runId);
-    emit({ type: "run-done" });
-  });
-  return { ok: true, runId };
-});
-
-ipcMain.handle("race:cancel", (_e, runId) => {
-  runs.get(runId)?.abort();
-  runs.delete(runId);
 });
 
 // `npm run electron:dev` passes --dev so the window loads the Vite dev server.
